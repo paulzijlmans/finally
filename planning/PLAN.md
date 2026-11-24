@@ -454,3 +454,57 @@ The container is designed to deploy to AWS App Runner, Render, or any container 
 - Portfolio visualization: heatmap renders with correct colors, P&L chart has data points
 - AI chat (mocked): send a message, receive a response, trade execution appears inline
 - SSE resilience: disconnect and verify reconnection
+
+---
+
+## 13. Review Feedback
+
+Review of this document. Items are grouped by type; none have been applied to the spec above.
+
+### Questions / Ambiguities
+
+1. **Daily change %** (§10 watchlist): The simulator and the price cache hold only latest and previous price. "Daily change %" needs a reference (session open price? seed price?). Define it, e.g. change vs. the price at backend start, or drop the column and show tick change.
+2. **Ticker validation on add** (§8): What happens when a user or the LLM adds an unknown ticker (e.g. `XYZZY`)? The simulator has no seed price for it, and Massive may return nothing. Specify: reject with 4xx, or simulator assigns a random seed price.
+3. **Trade validation rules**: Quantity must be > 0? Is there a minimum fractional size? Can the user trade a ticker not on the watchlist? Does a fully sold position delete the row? State the error response shape (status code and body), since the chat flow relies on it.
+4. **Average cost on partial sell**: Confirm avg_cost stays unchanged on sells, and realized P&L is not tracked (only unrealized is shown).
+5. **Removing a watched ticker that has a position**: Does the ticker keep streaming prices? Positions need prices, so the price source must cover watchlist ∪ positions. §6 says "union of all watched tickers" which omits this case.
+6. **Chat history window**: "Recent conversation history" is undefined. Give a number (e.g. last 20 messages).
+7. **LLM failure handling**: Missing/invalid API key, timeout, or malformed JSON. Return a 502 with a friendly message? Does the failed turn get stored?
+8. **Multi-action chat atomicity**: If the LLM returns 3 trades and the 2nd fails, do the others stand? Presumably yes, executed sequentially with per-trade results, but say so.
+9. **Portfolio snapshots growth**: One row per 30s is ~2,880/day. Is there a retention or downsampling policy, or a limit on `/api/portfolio/history`?
+10. **Market hours**: Simulator runs 24/7. With the Massive API the market is closed on nights and weekends, so prices are stale. Is this acceptable and documented?
+11. **Massive API endpoint**: Which endpoint is used (snapshot of all tickers vs. per-ticker)? On the free tier of 5 calls/min, a snapshot call is the only workable option for 10+ tickers.
+12. **`.env` handling in Docker**: §5 says the backend reads `.env` from the project root, but the container only gets it via `--env-file`. Pick one so there is no ambiguity.
+13. **Port/host binding and security**: Binding to 0.0.0.0 in a cloud deployment exposes an unauthenticated trading API. Fine for local; note that the optional cloud deploy needs at least basic protection.
+14. **Windows scripts**: Are they in scope for the core build? They cannot be tested on macOS CI.
+
+### Inconsistencies / Gaps
+
+- §4 lists `docker-compose.yml` as "optional", while §11 says no docker-compose for production. Pick one or remove it.
+- §3 says "Static file serving (Next.js export)" at `/*`, but §11 copies to `static/`. Name the actual path and the SPA fallback behavior.
+- §9 refers to the "cerebras-inference skill", but the installed skill is named `cerebras`.
+- §9 says structured outputs "should be used", but the schema is described only as an example. Provide the exact Pydantic model / JSON schema so backend and mock agree.
+- §7 `user_id` on every table, plus the `users_profile.id` naming, is inconsistent (`id` there vs. `user_id` elsewhere). Fine, but note it.
+- The `LLM_MOCK` response is never specified. Define the deterministic behavior (e.g. "buy" in the message triggers a fixed AAPL trade) so the E2E tests and backend agree.
+- Heatmap and P&L chart library: §10 says "Lightweight Charts or Recharts", but Lightweight Charts has no treemap. Recharts has one. Likely choose Recharts for everything, or state the split.
+- E2E: "heatmap renders with correct colors" is hard to assert on canvas. Prefer SVG (Recharts) or test data attributes.
+
+### Opportunities to Simplify
+
+1. **Drop SSE `previous price` + direction fields from the wire**: the client can derive direction from the last price. Smaller events, less contract to test. (Keep if the cache needs them anyway.)
+2. **Single Docker container, skip docker-compose.yml** entirely; the start scripts already wrap `docker run`.
+3. **Cut Windows PowerShell scripts** to a stretch goal. Windows users can use WSL or run the docker command from the README.
+4. **Remove Terraform/App Runner** mention from the core document; keep it as a separate note.
+5. **Chat panel**: skip the "collapsible" requirement initially. A fixed sidebar is enough for the MVP.
+6. **Snapshots**: instead of a 30s background task plus after-trade writes, record only after trades plus on a single 30s timer reusing the price loop. Or compute on read from trades, though that is more complex, so keep the timer.
+7. **Lazy DB init**: do it once in the FastAPI lifespan startup, not "on first request". Simpler and avoids race conditions.
+8. **`user_id` columns**: keep (cheap), but do not build any multi-user plumbing around them.
+9. **Two market-data implementations**: already simple. Keep the Massive client minimal and untested against the real API in CI (mock the HTTP).
+10. **E2E infra**: a Playwright container in compose is heavy. Consider running Playwright on the host against the container, and keep the compose file only if CI needs it.
+
+### Suggested Additions
+
+- A short "Definition of Done" / MVP cut line (what must work for the course demo vs. nice-to-have).
+- Error-handling conventions for the REST API (consistent `{error, detail}` body).
+- Note on timestamps: always UTC ISO-8601.
+- Rounding rules for money (display to 2 dp, store full precision) and a float-vs-Decimal decision (floats are fine for a simulation, but state it).
